@@ -168,6 +168,32 @@ const SYNC_PROGRESS_MESSAGES = new Set([
   "sync-status",
 ]);
 
+let authRedirectPending = false;
+
+// Re-authenticates without a blocking alert, once per page. An unattended tab
+// waits until it is visible again, so the login flow doesn't expire unseen.
+function handleAuthError(message: string, actionOrRedirectHeader?: string) {
+  if (logoutInProgress() || authRedirectPending) return;
+  authRedirectPending = true;
+  console.warn(message);
+  const go = () => {
+    if (!actionOrRedirectHeader || actionOrRedirectHeader === "reload") {
+      location.reload();
+    } else {
+      location.href = actionOrRedirectHeader;
+    }
+  };
+  if (document.visibilityState === "visible") {
+    go();
+  } else {
+    document.addEventListener("visibilitychange", function onVisible() {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", onVisible);
+      go();
+    });
+  }
+}
+
 export class Client {
   eventHook: EventHook;
   // The event names rendered results depend on (see event_interest.ts)
@@ -466,15 +492,8 @@ export class Client {
     this.httpSpacePrimitives = new HttpSpacePrimitives(
       document.baseURI.replace(/\/*$/, "") + fsEndpoint,
       this.bootConfig.spaceFolderPath,
-      (message, actionOrRedirectHeader) => {
-        if (logoutInProgress()) return;
-        alert(message);
-        if (!actionOrRedirectHeader || actionOrRedirectHeader === "reload") {
-          location.reload();
-        } else {
-          location.href = actionOrRedirectHeader;
-        }
-      },
+      (message, actionOrRedirectHeader) =>
+        handleAuthError(message, actionOrRedirectHeader),
       // Bearer token injected by an embedder (e.g. the Tauri App) as
       // `globalThis.silverbullet.bearerToken` before the bundle loads.
       // Undefined in a normal browser deployment, which leaves
@@ -1393,16 +1412,7 @@ export class Client {
         break;
       }
       case "auth-error": {
-        if (logoutInProgress()) break;
-        alert(message.message);
-        if (
-          !message.actionOrRedirectHeader ||
-          message.actionOrRedirectHeader === "reload"
-        ) {
-          location.reload();
-        } else {
-          location.href = message.actionOrRedirectHeader;
-        }
+        handleAuthError(message.message, message.actionOrRedirectHeader);
         break;
       }
       case "server-version": {

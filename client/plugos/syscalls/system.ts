@@ -239,7 +239,7 @@ export function systemSyscalls(
       callback: async (_ctx, logout = false) => {
         await client.wipeClient();
         if (logout) {
-          location.href = ".logout";
+          location.href = new URL(".logout", document.baseURI).href;
         } else {
           alert("Client wiped, feel free to navigate elsewhere");
         }

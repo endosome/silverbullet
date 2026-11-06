@@ -178,12 +178,13 @@ self.addEventListener("message", async (event: any) => {
       await (await captureStore).clear();
       if (proxyRouter.syncEngine) {
         await proxyRouter.syncEngine.wipe();
-        broadcastMessage({
-          type: "dataWiped",
-        });
       } else {
         console.warn("Not performing sync data wipe, sync engine not started");
       }
+      // Always answer, the client waits for this
+      broadcastMessage({
+        type: "dataWiped",
+      });
       break;
     }
     case "perform-file-sync": {

@@ -1496,21 +1496,24 @@ export class Client {
     }
     if (navigator.serviceWorker?.controller) {
       await new Promise<void>((resolve) => {
-        navigator.serviceWorker.addEventListener("message", async (e: any) => {
+        const done = () => {
+          clearTimeout(timeout);
+          navigator.serviceWorker.removeEventListener("message", onMessage);
+          resolve();
+        };
+        const onMessage = (e: any) => {
           const message: ServiceWorkerSourceMessage = e.data;
           if (message.type === "dataWiped") {
-            console.log(
-              "Got data wipe confirm, uninstalling service worker now",
-            );
-            const registrations =
-              await navigator.serviceWorker.getRegistrations();
-            for (const registration of registrations) {
-              await registration.unregister();
-            }
-            console.log("Unregistered all service workers");
-            resolve();
+            console.log("Got data wipe confirm");
+            done();
           }
-        });
+        };
+        // A restarted service worker may never answer, don't wait for ever
+        const timeout = setTimeout(() => {
+          console.warn("Timed out waiting for data wipe confirm");
+          done();
+        }, 5000);
+        navigator.serviceWorker.addEventListener("message", onMessage);
         navigator.serviceWorker?.getRegistration().then((registration) => {
           console.log(
             "Sending data wipe request to service worker",
@@ -1521,6 +1524,11 @@ export class Client {
           } as ServiceWorkerTargetMessage);
         });
       });
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const registration of registrations) {
+        await registration.unregister();
+      }
+      console.log("Unregistered all service workers");
     } else {
       console.info(
         "Service workers not enabled (no HTTPS?), so not unregistering.",

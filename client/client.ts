@@ -64,6 +64,7 @@ import {
   saveCurrentEditor,
 } from "./logout.ts";
 import { waitForLogout } from "./logout_state.ts";
+import { deleteForeignDatabases } from "./wipe.ts";
 import { isSafeUrl } from "./markdown_renderer/sanitize_html.ts";
 import {
   isModalOpen,
@@ -1485,15 +1486,7 @@ export class Client {
     console.log("Wiping IndexedDB databses not connected to this space...");
     const dbName = (this.ds.kv as any).dbName;
     const suffix = dbName.replace("sb_data", "");
-    if (indexedDB.databases) {
-      const allDbs = await indexedDB.databases();
-      for (const db of allDbs) {
-        if (!db.name?.endsWith(suffix)) {
-          console.log("Deleting database", db.name);
-          indexedDB.deleteDatabase(db.name!);
-        }
-      }
-    }
+    await deleteForeignDatabases(indexedDB, suffix);
     if (navigator.serviceWorker?.controller) {
       await new Promise<void>((resolve) => {
         const done = () => {

@@ -62,6 +62,7 @@ _These changes are available from the [edge builds](https://github.com/silverbul
 * Fix: opening the command palette or a picker right after a page loaded could lose its focus to the editor, so what you typed went into the page instead.
 * Fix: when the login session ends while a tab is open, SilverBullet now re-authenticates once without a blocking alert, waiting until the tab is visible again.
 * Fix: `Client: Logout` and `Client: Wipe` no longer hang when the browser had stopped the service worker, and logout works from pages inside folders.
+* Fix: `Client: Logout` and `Client: Wipe` no longer wait 5 seconds: the service worker always confirms the wipe, and the wipe no longer deletes the worker's own capture database from under it.
 * Fix: while Space Lua scripts reloaded (after editing a script page), widgets on the open page could briefly fail with errors such as "attempt to index a nil value", because they rendered against a half-loaded environment. Scripts now load into a fresh environment that takes over only once all of them have run.
 * Fix: index-backed views no longer refresh halfway through a queued reindex, which could temporarily hide the page being edited.
 * Fix: Git sync errors caused by unrelated histories now offer a recovery action to check and combine both histories. Automatic revisions created during the connection check no longer invalidate it.

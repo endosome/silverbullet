@@ -19,6 +19,7 @@ import { cachesToDelete } from "./service_worker/cache_generations.ts";
 import { WorkerLogout } from "./service_worker/logout.ts";
 import { ProxyRouter } from "./service_worker/proxy_router.ts";
 import { SyncEngine } from "./service_worker/sync_engine.ts";
+import { wipeWorkerData } from "./wipe.ts";
 import { getOrCreateClientId } from "./spaces/client_id.ts";
 import { fsEndpoint } from "./spaces/constants.ts";
 import { DataStoreSpacePrimitives } from "./spaces/datastore_space_primitives.ts";
@@ -181,18 +182,13 @@ self.addEventListener("message", async (event: any) => {
       break;
     }
     case "wipe-data": {
-      await (await captureStore).clear();
-      await deleteToolingCaches().catch((e) =>
-        console.error("Could not delete cached tool pages:", e),
-      );
-      if (proxyRouter.syncEngine) {
-        await proxyRouter.syncEngine.wipe();
-      } else {
-        console.warn("Not performing sync data wipe, sync engine not started");
-      }
-      // Always answer, the client waits for this
-      broadcastMessage({
-        type: "dataWiped",
+      await wipeWorkerData({
+        clearCapture: async () => (await captureStore).clear(),
+        clearTooling: () => deleteToolingCaches(),
+        wipeSync: proxyRouter.syncEngine
+          ? () => proxyRouter.syncEngine!.wipe()
+          : undefined,
+        confirm: () => broadcastMessage({ type: "dataWiped" }),
       });
       break;
     }

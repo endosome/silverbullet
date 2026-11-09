@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Build and publish a release from this machine, instead of from CI.
 #
-#   scripts/release-local.sh <version> [--docker] [--dry-run] [--skip-tests]
+#   scripts/release-local.sh <version> [--docker | --docker-only] [--dry-run]
+#                                   [--skip-tests]
 #
 # Steps: bump version.ts/package.json (if needed) and commit, tag, run the
 # vitest suite, cross-compile the server and `sb` for the selected targets, zip
 # them with the asset names `sb upgrade` and the install scripts expect, and create the GitHub
 # release. With --docker it also builds and pushes the slim and default images
-# to ghcr.io/<owner>/silverbullet.
+# to ghcr.io/<owner>/silverbullet. --docker-only does just that for a version
+# that is already released and tagged (HEAD may differ from the tag only
+# under scripts/).
 #
 # Needs: `gh` logged in (repo scope; docker also needs write:packages, see
 # `gh auth refresh -s write:packages`), rustup, node, zip, and the cross
@@ -31,9 +34,11 @@ VERSION=""
 DOCKER=0
 DRY_RUN=0
 SKIP_TESTS=0
+DOCKER_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --docker) DOCKER=1 ;;
+    --docker-only) DOCKER=1; DOCKER_ONLY=1; SKIP_TESTS=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --skip-tests) SKIP_TESTS=1 ;;
     -h | --help) usage ;;
@@ -98,13 +103,20 @@ if [ ${#missing[@]} -gt 0 ]; then
   exit 1
 fi
 if [ "$DOCKER" = 1 ]; then
+  gh auth status 2>&1 | grep -q write:packages ||
+    { echo "gh token lacks write:packages: gh auth refresh -h github.com -s write:packages" >&2; exit 1; }
   for t in linux-x86_64 linux-aarch64; do
     [[ " $TARGETS " == *" $t "* ]] || { echo "--docker needs target $t" >&2; exit 1; }
   done
   docker buildx version >/dev/null
 fi
 command -v zip >/dev/null || { echo "zip is required" >&2; exit 1; }
-if gh release view "$VERSION" -R "$REPO" >/dev/null 2>&1; then
+if [ "$DOCKER_ONLY" = 1 ]; then
+  gh release view "$VERSION" -R "$REPO" >/dev/null 2>&1 ||
+    { echo "Release $VERSION does not exist on $REPO" >&2; exit 1; }
+  git diff --quiet "refs/tags/$VERSION" HEAD -- . ':!scripts' ||
+    { echo "HEAD differs from tag $VERSION beyond scripts/; check the tag out first" >&2; exit 1; }
+elif gh release view "$VERSION" -R "$REPO" >/dev/null 2>&1; then
   echo "Release $VERSION already exists on $REPO" >&2
   exit 1
 fi
@@ -115,18 +127,20 @@ fi
 
 # --- Version, commit, tag ------------------------------------------------
 echo "Releasing $VERSION to $REPO from $BRANCH"
-echo "export const version = \"$VERSION\";" > version.ts
-npm version --no-git-tag-version --allow-same-version "$VERSION" >/dev/null
-if [ -n "$(git status --porcelain)" ]; then
-  git commit -qam "$VERSION [skip ci]"
-fi
-if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-  [ "$(git rev-parse "$VERSION^{commit}")" = "$(git rev-parse HEAD)" ] || {
-    echo "Tag $VERSION exists but is not at HEAD; move or delete it first" >&2
-    exit 1
-  }
-else
-  git tag "$VERSION"
+if [ "$DOCKER_ONLY" = 0 ]; then
+  echo "export const version = \"$VERSION\";" > version.ts
+  npm version --no-git-tag-version --allow-same-version "$VERSION" >/dev/null
+  if [ -n "$(git status --porcelain)" ]; then
+    git commit -qam "$VERSION [skip ci]"
+  fi
+  if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+    [ "$(git rev-parse "$VERSION^{commit}")" = "$(git rev-parse HEAD)" ] || {
+      echo "Tag $VERSION exists but is not at HEAD; move or delete it first" >&2
+      exit 1
+    }
+  else
+    git tag "$VERSION"
+  fi
 fi
 
 # --- Build -----------------------------------------------------------------------
@@ -136,7 +150,7 @@ rm -f version.json
 mkdir -p "$OUT"
 for t in $TARGETS; do rustup target add "${TARGET_TRIPLE[$t]}"; done
 npm run build
-npm run build:plug-compile
+[ "$DOCKER_ONLY" = 1 ] || npm run build:plug-compile
 
 # After the build: the tests import the generated version.json.
 if [ "$SKIP_TESTS" = 0 ]; then
@@ -147,8 +161,12 @@ for t in $TARGETS; do
   triple=${TARGET_TRIPLE[$t]}
   exe=""
   [ "$t" = windows-x86_64 ] && exe=".exe"
-  cargo build --release -p silverbullet -p sb --target "$triple"
-  for pair in "silverbullet:silverbullet-server-$t" "sb:sb-$t"; do
+  if [ "$DOCKER_ONLY" = 1 ]; then
+    cargo build --release -p silverbullet --target "$triple"
+  else
+    cargo build --release -p silverbullet -p sb --target "$triple"
+  fi
+  [ "$DOCKER_ONLY" = 1 ] || for pair in "silverbullet:silverbullet-server-$t" "sb:sb-$t"; do
     bin=${pair%%:*}
     zipname=${pair##*:}.zip
     (cd "target/$triple/release" && zip -q "$OLDPWD/$OUT/$zipname" "$bin$exe")
@@ -166,12 +184,14 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 # --- Publish -----------------------------------------------------------------------
-# Pushed only now, so a failed test or build leaves nothing on the remote.
-git push origin "$BRANCH"
-git push origin "refs/tags/$VERSION"
-gh release create "$VERSION" -R "$REPO" --verify-tag --title "$VERSION" \
-  --generate-notes \
-  docs/CHANGELOG.md dist/plug-compile.js "$OUT"/*.zip
+if [ "$DOCKER_ONLY" = 0 ]; then
+  # Pushed only now, so a failed test or build leaves nothing on the remote.
+  git push origin "$BRANCH"
+  git push origin "refs/tags/$VERSION"
+  gh release create "$VERSION" -R "$REPO" --verify-tag --title "$VERSION" \
+    --generate-notes \
+    docs/CHANGELOG.md dist/plug-compile.js "$OUT"/*.zip
+fi
 
 if [ "$DOCKER" = 1 ]; then
   IMAGE="ghcr.io/${OWNER,,}/silverbullet"
@@ -189,4 +209,5 @@ if [ "$DOCKER" = 1 ]; then
     -t "$IMAGE:$VERSION-runtime-api" -t "$IMAGE:latest-runtime-api" .
 fi
 
+[ "$DOCKER_ONLY" = 1 ] && { echo "Pushed images for $VERSION to ghcr.io/${OWNER,,}/silverbullet"; exit 0; }
 echo "Released $VERSION: https://github.com/$REPO/releases/tag/$VERSION"
